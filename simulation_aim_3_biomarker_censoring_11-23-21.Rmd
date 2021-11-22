@@ -1,0 +1,280 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r}
+library(survival)
+library(survminer)
+library(dplyr)
+library(SurvCorr)
+library(tranSurv)
+rm(list=ls())
+```
+
+
+```{r}
+# ok. events we care about:
+# 1) mortality
+# 2) testing
+# 3) progression
+# 4) right censoring
+# 5) observation
+```
+
+```{r}
+logit <- function(x){log(x/(1-x))}
+
+sigmoid <- function(x) {
+   1 / (1 + exp(-x))
+}
+```
+
+
+```{r}
+
+pop_hazard_mort_func <- function(t){
+  # constant hazard or exponential distribution for survival
+  hazard = 0.02
+
+  
+  # weibull
+  #lambda = 0.05
+  #p = 0.1
+  #hazard = p * lambda^p * t^(p-1)
+  
+  #hazard = min(1, 0.1 * sqrt(t))
+  
+  return(hazard)
+  
+}
+
+
+create_patient_mort_hazard_vector <- function(max_time, std_dev, population_hazard_func, biomarker, biomarker_mult, random_delta){
+  diff_vector <- vector()
+  diff_vector[1] <- rnorm(1,mean=0, sd=std_dev)
+  for(i in 2:max_time){
+    updown = ifelse(rbinom(1,1,0.5)==1, 1, -1)
+    diff_vector[i] = diff_vector[i-1] + updown*random_delta
+  }
+
+  pop_vector <- vector()
+  for(i in 1:max_time){
+    prob_mort = population_hazard_func(i)
+    logit_mort = logit(prob_mort)
+    pop_vector[i] = logit_mort
+  }
+  
+  output_logits = pop_vector + diff_vector + biomarker*biomarker_mult
+  output_probs = sigmoid(output_logits)
+  return(output_probs)
+  
+}
+
+
+create_progression_hazard_vector <- function(std_dev, mort_hazard_vector){
+  return(sigmoid(logit(mort_hazard_vector) + rnorm(1,mean=1,sd=std_dev)))
+}
+
+
+
+pop_hazard_genomic_func <- function(t){
+  hazard = 0.25
+  return(hazard)
+}
+
+create_patient_testing_hazard_vector <- function(max_time, multiplier, patient_mort_hazard_vector, population_hazard_genomic_func){
+  
+  output_vector <- vector()
+  for(i in 1:max_time){
+    output_vector[i] = sigmoid(logit(population_hazard_genomic_func(i)) + multiplier*logit(patient_mort_hazard_vector[i]) )
+  }
+  return(output_vector)
+}
+
+
+create_patient_right_censoring_hazard_vector <- function(max_time){
+  hazard = 0.05
+  return(rep(hazard, max_time))
+}
+
+create_patient_observation_vector <- function(mort_hazard_vector){
+  # could make observation a function of mortality risk but for now will not
+  observed_prob = 0.1
+  prelim = rep(observed_prob, length(mort_hazard_vector))
+  # always observe last month for now
+  prelim[length(mort_hazard_vector)] = 1
+  return(prelim)
+}
+
+```
+
+
+```{r}
+# make 3d array (patients=1000, outcome=5, result=60)
+patients = array(dim=c(10000,5,60))
+hazards = patients
+
+
+# biomarker prevalence 0.3
+biomarker = rbinom(dim(patients)[1], 1, 0.3)
+
+# biomarker multiplier
+biomarker_mult = 2
+
+survival_times = vector()
+died = vector()
+testing_times = vector()
+tested = vector()
+progression_times = vector()
+progressed = vector()
+right_censor_times = vector()
+right_censored = vector()
+
+patient_obs_times = list()
+
+for(i in 1:dim(patients)[1]){
+  
+  # patient mortality hazard
+  hazards[i,1,] = create_patient_mort_hazard_vector(dim(patients)[3], std_dev = 2, pop_hazard_mort_func, biomarker[i], biomarker_mult, random_delta = 1)
+  
+  # genomic testing hazard
+  hazards[i,2,] = create_patient_testing_hazard_vector(dim(patients)[3], multiplier = 2, hazards[i,1,], pop_hazard_genomic_func)
+  
+  hazards[i,3,] = create_progression_hazard_vector(1, hazards[i,1,])
+  
+  hazards[i,4,] = create_patient_right_censoring_hazard_vector(dim(patients)[3])
+
+  hazards[i,5,] = create_patient_observation_vector(hazards[i,1,])
+  
+  # patient mortality events
+  patients[i,1,] = sapply(hazards[i,1,], function(x){rbinom(1,1,x)})
+
+  # genomic testing events
+  patients[i,2,] = sapply(hazards[i,2,], function(x){rbinom(1,1,x)})
+  
+  # progression events
+  patients[i,3,] = sapply(hazards[i,3,], function(x){rbinom(1,1,x)})
+
+  # right censoring events
+  patients[i,4,] = sapply(hazards[i,4,], function(x){rbinom(1,1,x)})
+  
+  # observation indicator for each month
+  patients[i,5,] = sapply(hazards[i,5,], function(x){rbinom(1,1,x)})
+
+  patient_obs_times[[i]] = which(patients[i,5,] == 1)
+
+  # collapse and calculate TTEs
+  survival_times[i] = ifelse(sum(patients[i,1,]) > 0, which.max(patients[i,1,]), NA)
+  died[i] = ifelse(is.na(survival_times[i]), 0, 1)
+  survival_times[i] = ifelse(died[i] == 0, dim(patients)[3], survival_times[i])
+
+  testing_times[i] = ifelse(sum(patients[i,2,]) > 0, which.max(patients[i,2,]), NA)
+  tested[i] = ifelse(is.na(testing_times[i]), 0, 1)
+  testing_times[i] = ifelse(tested[i] == 0, dim(patients)[3], testing_times[i])
+
+  progression_times[i] = ifelse(sum(patients[i,3,]) > 0, which.max(patients[i,3,]), NA)
+  progressed[i] = ifelse(is.na(progression_times[i]), 0, 1)
+  progression_times[i] = ifelse(progressed[i] == 0, dim(patients)[3], progression_times[i])
+  
+  right_censor_times[i] = ifelse(sum(patients[i,4,]) > 0, which.max(patients[i,4,]), NA)
+  right_censored[i] = ifelse(is.na(right_censor_times[i]), 0, 1)
+  right_censor_times[i] = ifelse(right_censored[i] == 0, dim(patients)[3], right_censor_times[i])  
+  
+}
+
+result = data.frame(cbind(biomarker, survival_times, died, testing_times, tested, progression_times, progressed, right_censor_times, right_censored)) %>% mutate(pfs_times = pmin(progression_times, survival_times)) %>% mutate(pfs_event = ifelse(died==0 & pfs_times == dim(patients)[3], 0, 1))
+
+# true dataset contains the right censoring times but does not use them in pfs and os calculations
+
+survfit <- surv_fit(Surv(survival_times, died) ~ 1, data = result)
+ggsurvplot(survfit, xlim=c(0,36), risk.table=TRUE, title='OS, true cohort')
+
+
+survfit <- surv_fit(Surv(pfs_times, pfs_event) ~ 1, data = result)
+ggsurvplot(survfit, xlim=c(0,36), risk.table=TRUE, title='PFS, true cohort')
+
+
+survfit <- surv_fit(Surv(survival_times, died) ~ biomarker, data = result)
+ggsurvplot(survfit, xlim=c(0,36), risk.table=TRUE, title='OS, true cohort')
+
+print(summary(coxph(Surv(survival_times, died) ~ biomarker, data = result)))
+
+
+
+
+
+```
+
+
+
+
+
+
+
+```{r}
+result <- result %>% mutate(observed = ifelse(tested == 1 & (survival_times >= testing_times), TRUE, FALSE))
+observed_obs_times <- patient_obs_times[result$observed]
+observed <- result %>% filter(observed==TRUE)
+
+# deal with informative right censoring
+informed_right_censoring = 0
+if(informed_right_censoring==0){
+  observed <- observed %>% mutate(progression_times = ifelse(right_censored == 1 & right_censor_times < progression_times, right_censor_times, progression_times)) %>% mutate(progressed = ifelse(right_censored == 1 & progression_times == right_censor_times, 0, progressed)) %>% mutate(survival_times = ifelse(right_censored == 1 & right_censor_times < survival_times, right_censor_times, survival_times)) %>% mutate(died = ifelse(right_censored == 1 & survival_times == right_censor_times, 0, died))
+} else {
+    observed <- observed %>% mutate(progression_times = ifelse(right_censored == 1 & right_censor_times < progression_times, right_censor_times, progression_times)) %>% mutate(progressed = ifelse(right_censored == 1 & progression_times == right_censor_times, 0, progressed)) %>% mutate(survival_times = ifelse(died==0 & right_censored == 1 & right_censor_times < survival_times, right_censor_times, survival_times)) 
+
+}
+
+
+# adjust progression time based on observation time
+for(i in 1:nrow(observed)){
+  if(observed[i,]$progressed == 1){
+    obs_times = observed_obs_times[[i]]
+    observed[i,]$progression_times = obs_times[obs_times >= observed[i,]$progression_times][1]
+  }
+}
+
+
+
+observed <- observed %>% mutate(pfs_times = pmin(survival_times, progression_times)) %>% mutate(pfs_event = ifelse(progressed==1 | died == 1, 1, 0))
+
+
+
+# method that incorporates immortal time, which generally is bad but can sometimes lead to less biased estimates here
+survfit <- surv_fit(Surv(survival_times, died) ~ 1, data = observed)
+ggsurvplot(survfit, xlim=c(0,36), title='Observed OS with immortal time', risk.table=TRUE)
+
+survfit <- surv_fit(Surv(survival_times, died) ~ biomarker, data = observed)
+ggsurvplot(survfit, xlim=c(0,36), title='Observed OS with immortal time', risk.table=TRUE)
+
+# biomarker calculation
+summary(coxph(Surv(survival_times, died) ~ biomarker, data = observed))
+
+survfit <- surv_fit(Surv(pfs_times, pfs_event) ~ biomarker, data = observed)
+ggsurvplot(survfit, xlim=c(0,36), title='Observed PFS with immortal time', risk.table=TRUE)
+
+survfit <- surv_fit(Surv(pfs_times, pfs_event) ~ 1, data = observed)
+ggsurvplot(survfit, xlim=c(0,36), title='Observed PFS with immortal time', risk.table=TRUE)
+
+
+# method that would yield appropriate left trunc if no assoc with death
+survfit <- surv_fit(Surv(testing_times, survival_times, died) ~ 1, data = observed)
+ggsurvplot(survfit, xlim=c(0,36), title='Observed OS with standard left trunc', risk.table=TRUE)
+
+
+survfit <- surv_fit(Surv(testing_times, survival_times, died) ~ biomarker, data = observed)
+ggsurvplot(survfit, xlim=c(0,36), title='Observed OS with standard left trunc', risk.table=TRUE)
+
+# biomarker calculation
+summary(coxph(Surv(testing_times, survival_times, died) ~ biomarker , data = observed))
+
+
+```
+
+
+```{r}
+# calculate conditional Kendall's tau to check for informative left truncation
+cKendall(observed$testing_times, observed$survival_times, died)
+```
