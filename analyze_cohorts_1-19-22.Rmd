@@ -1,0 +1,289 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r}
+
+rm(list=ls())
+options(scipen=100)
+source('./simulation_functions.R')
+Sys.setenv(RETICULATE_PYTHON = "/Users/klkehl/opt/anaconda3/envs/pytorch/bin/python")
+RETICULATE_PYTHON="/Users/klkehl/opt/anaconda3/envs/pytorch/bin/python"
+#library(reticulate)
+#use_condaenv('pytorch')
+```
+
+
+```{r echo=FALSE, include=FALSE}
+# read in the many sims
+output_list = list()
+invisible(for (i in c(1:135)){
+  output_list[[i]] <- read_csv(paste0("./sims/sim_", i, '.csv'))
+})
+```
+
+
+
+
+```{r}
+final_output <- bind_rows(output_list) %>% mutate(true_os_biomarker_hr = exp(true_os_biomarker_coef)) %>% mutate(observed_os_biomarker_hr = exp(observed_os_biomarker_coef)) %>% mutate(os_biomarker_hr_ratio = exp(os_biomarker_coef_diff)) %>% mutate(true_pfs_biomarker_hr = exp(true_pfs_biomarker_coef)) %>% mutate(observed_pfs_biomarker_hr = exp(observed_pfs_biomarker_coef)) %>% mutate(pfs_biomarker_hr_ratio = exp(pfs_biomarker_coef_diff))
+#output_naive <- final_output %>% filter(strategy=='naive') 
+#output_left_trunc = final_output %>% filter(strategy=='left_trunc')
+#output_post_test = final_output %>% filter(strategy=='post_test')
+
+rm(output_list)
+#final_output <- final_output %>% filter(strategy != 'post_test')
+```
+
+
+```{r}
+print(gghistogram(final_output, x='prop_observed', y="..density..", color='strategy', fill='strategy', xlim=c(0,1), title = 'Proportion observed'))
+
+
+print(gghistogram(final_output, x='os_true_median', y="..density..", color='strategy', fill='strategy', title = 'True median OS'))
+print(gghistogram(final_output, x='os_observed_median', y="..density..", color='strategy', fill='strategy', title = 'Observed median OS'))
+print(gghistogram(final_output, x='os_observed_minus_true', y="..density..", color='strategy', fill='strategy', title = 'Observed minus true median OS'))
+
+
+print(gghistogram(final_output, x='pfs_true_median', y="..density..", color='strategy', fill='strategy', title = 'True median pfs'))
+print(gghistogram(final_output, x='pfs_observed_median', y="..density..", color='strategy', fill='strategy', title = 'Observed median pfs'))
+print(gghistogram(final_output, x='pfs_observed_minus_true', y="..density..", color='strategy', fill='strategy', title = 'Observed minus true median pfs'))
+
+
+print(gghistogram(final_output, x='true_os_biomarker_hr', y="..density..", color='strategy', fill='strategy', title = 'True biomarker HR for OS'))
+print(gghistogram(final_output %>% filter(observed_os_biomarker_hr < 10), x='observed_os_biomarker_hr', y="..density..", color='strategy', fill='strategy', title = 'Observed biomarker HR for OS'))
+print(gghistogram(final_output %>% filter(observed_os_biomarker_hr < 10), x='os_biomarker_coef_diff', y="..density..", color='strategy', fill='strategy', title = 'Observed minus true log HR for OS'))
+
+
+
+print(gghistogram(final_output, x='true_pfs_biomarker_hr', y="..density..", color='strategy', fill='strategy', title = 'True biomarker HR for pfs'))
+print(gghistogram(final_output %>% filter(observed_pfs_biomarker_hr < 10), x='observed_pfs_biomarker_hr', y="..density..", color='strategy', fill='strategy', title = 'Observed biomarker HR for pfs'))
+print(gghistogram(final_output %>% filter(observed_pfs_biomarker_hr < 10), x='pfs_biomarker_coef_diff', y="..density..", color='strategy', fill='strategy', title = 'Observed minus true log HR for pfs'))
+
+
+
+```
+
+
+```{r}
+
+```
+
+
+
+
+
+
+```{r}
+
+scale2 <- function(x, na.rm = TRUE) (x - mean(x, na.rm = na.rm)) / sd(x, na.rm)
+
+#independents <- final_output %>% mutate(counting_process = ifelse(strategy=='left_trunc', 1, 0)) %>% mutate(post_test = ifelse(strategy=='post_test', 1, 0)) %>% mutate(left_trunc_w_timetotest = ifelse(strategy == 'left_trunc_timetotest_covariate', 1, 0)) %>% mutate(left_trunc_w_timetotest_andrisk = ifelse(strategy=='left_trunc_timetotestandrisk_covariate', 1, 0)) %>% select(biomarker_effect, biomarker_prevalence, pop_mort_baseline_hazard, pop_mort_gamma,pop_genomic_baseline_hazard,pop_genomic_gamma, genomic_sd, patient_mort_hazard_std_dev, patient_mort_hazard_random_delta, patient_testing_hazard_multiplier, patient_testing_hazard_multiplier_increasing, progression_hazard_std_dev, right_censor_hazard, informed_right_censoring, observation_prob, informative_observation_multiplier, counting_process, post_test, left_trunc_w_timetotest, left_trunc_w_timetotest_andrisk) 
+#%>% mutate_all(scale2)
+
+independents <- final_output %>% mutate(counting_process = ifelse(strategy=='left_trunc', 1, 0)) %>% mutate(post_test = ifelse(strategy=='post_test', 1, 0)) %>% mutate(left_trunc_w_timetotest = ifelse(strategy == 'left_trunc_timetotest_covariate', 1, 0)) %>% mutate(left_trunc_w_timetotest_andrisk = ifelse(strategy=='left_trunc_timetotestandrisk_covariate', 1, 0)) %>% select(biomarker_effect, biomarker_prevalence, pop_mort_baseline_hazard, pop_mort_gamma,pop_genomic_baseline_hazard,pop_genomic_gamma, genomic_sd, patient_mort_hazard_std_dev, patient_mort_hazard_random_delta, patient_testing_hazard_multiplier, patient_testing_hazard_multiplier_increasing, progression_hazard_std_dev, right_censor_hazard, informed_right_censoring, observation_prob, informative_observation_multiplier, strategy) 
+
+# drop independent variables where all are missing (no variation in the simulation dataset)
+independents <- independents %>% select_if(~!all(is.na(.)))
+
+outcomes <- final_output %>% select(prop_observed, os_observed_minus_true, pfs_observed_minus_true, os_biomarker_coef_diff, pfs_biomarker_coef_diff, os_biomarker_type1_error, os_biomarker_type2_error, pfs_biomarker_type1_error, pfs_biomarker_type2_error) %>% mutate(prop_observed = pmin(0.99,prop_observed + 0.01)) %>% mutate(logit_observed = logit(prop_observed)) %>% select(-prop_observed) 
+#%>% mutate_at(c("os_observed_minus_true", "pfs_observed_minus_true", "os_biomarker_coef_diff", "pfs_biomarker_coef_diff"), function(x) abs(x)) 
+#%>% #mutate_all(scale2)
+```
+
+
+```{r}
+get_coefs <- function(dataset, outcome, key_predictor, all_predictors, sample_group_n=5, bootstrap_n = 5, type='linear'){
+  outputs = vector("list", length=bootstrap_n)
+  for(i in bootstrap_n){
+
+      independent_vars <- all_predictors
+      indpendent_vars <- independent_vars[independent_vars != key_predictor]
+      independent_vars <- sample(indpendent_vars, sample_group_n)
+    
+
+      dataset <- dataset %>% group_by_at(vars(all_of(independent_vars))) 
+
+      if(type=='linear'){
+        output <- dataset %>%  do(group_size = tally(.), coef = lm(paste0(eval(outcome), " ~ ", eval(key_predictor)), data=.)$coefficients[-1]) %>% mutate(this_independent=list(names(coef))) %>% tidyr::unnest(., cols = c(group_size, coef, this_independent))
+      } else {
+        output <- dataset %>% do(group_size = tally(.), coef = glm(paste0(eval(outcome), " ~ ", eval(key_predictor)), data=., family='binomial')$coefficients[-1]) %>% mutate(this_independent  = list(names(coef))) %>% tidyr::unnest(., cols = c(group_size, coef, this_independent))
+      }
+      outputs[[i]] = output
+  }
+  return(bind_rows(outputs))
+}
+
+
+```
+
+
+
+```{r}
+# for continuous outcomes, lm
+analysis <- bind_cols(outcomes, independents)
+results <- list()
+index = 1
+for(this_outcome in colnames(outcomes)[!grepl("error", colnames(outcomes))]) {
+  for(independent in colnames(independents)){
+    temp = get_coefs(analysis, outcome=eval(this_outcome), key_predictor = eval(independent), colnames(independents), sample_group_n=8, bootstrap_n=5)
+    temp$this_outcome = this_outcome
+    #print(gghistogram(temp, x='coef', fill='lightblue', color='blue', xlab=paste0("Coef. for predictor ", independent, " and outcome ", this_outcome)))
+    # if(index==1){
+    #   write_csv(temp %>% select(-.groups), "funny_linear_results.csv")
+    # }
+    # else{
+    #   write_csv(temp %>% select(-.groups), "funny_linear_results.csv", append=TRUE)
+    # }
+    results[[index]] = temp
+    index = index+1
+  }
+}
+
+
+
+```
+
+
+
+```{r}
+for(this_outcome in colnames(outcomes)[grepl("error", colnames(outcomes))]) {
+  for(independent in colnames(independents)){
+    temp = get_coefs(analysis, outcome=eval(this_outcome), key_predictor = eval(independent), colnames(independents), sample_group_n=8, bootstrap_n=5, type='logistic')
+    temp$this_outcome = this_outcome
+    #print(gghistogram(temp, x='coef', fill='lightblue', color='blue', xlab=paste0("Coef. for predictor ", independent, " and outcome ", this_outcome)))
+    #write_csv(temp %>% select(-.groups), "funny_linear_results.csv", append=TRUE)
+    results[[index]] = temp
+    index = index+1
+  }
+}
+```
+
+
+
+```{r}
+results = bind_rows(results)
+write_csv(results, 'funny_linear_results.csv')
+```
+
+
+```{r}
+results <- read_csv('funny_linear_results.csv', guess_max = 1e6)
+```
+
+
+```{r}
+# make histograms
+the_outcomes <- results %>% distinct(this_outcome) %>% unlist()
+outcome = the_outcomes[1]
+  for(independent in results %>% distinct(this_independent) %>% unlist()){
+    temp <- results %>% filter(this_outcome == outcome) %>% filter(this_independent == independent)
+    print(gghistogram(temp, x='coef', fill='lightblue', color='blue', xlab=paste0("Coef. for predictor ", temp$this_independent[1], " and outcome ", temp$this_outcome[1])))
+  }
+
+
+```
+
+
+```{r}
+outcome = the_outcomes[2]
+  for(independent in results %>% distinct(this_independent) %>% unlist()){
+    temp <- results %>% filter(this_outcome == outcome) %>% filter(this_independent == independent)
+    print(gghistogram(temp, x='coef', fill='lightblue', color='blue', xlab=paste0("Coef. for predictor ", temp$this_independent[1], " and outcome ", temp$this_outcome[1])))
+  }
+
+```
+
+```{r}
+outcome = the_outcomes[3]
+  for(independent in results %>% distinct(this_independent) %>% unlist()){
+    temp <- results %>% filter(this_outcome == outcome) %>% filter(this_independent == independent)
+    print(gghistogram(temp, x='coef', fill='lightblue', color='blue', xlim=c(-3,3), xlab=paste0("Coef. for predictor ", temp$this_independent[1], " and outcome ", temp$this_outcome[1])))
+  }
+
+```
+
+
+```{r}
+outcome = the_outcomes[4]
+  for(independent in results %>% distinct(this_independent) %>% unlist()){
+    temp <- results %>% filter(this_outcome == outcome) %>% filter(this_independent == independent)
+    print(gghistogram(temp, x='coef', fill='lightblue', color='blue', xlim=c(-3,3), xlab=paste0("Coef. for predictor ", temp$this_independent[1], " and outcome ", temp$this_outcome[1])))
+  }
+
+```
+
+
+```{r}
+outcome = the_outcomes[5]
+  for(independent in results %>% distinct(this_independent) %>% unlist()){
+    temp <- results %>% filter(this_outcome == outcome) %>% filter(this_independent == independent)
+    print(gghistogram(temp, x='coef', fill='lightblue', color='blue', xlab=paste0("Coef. for predictor ", temp$this_independent[1], " and outcome ", temp$this_outcome[1])))
+  }
+
+```
+
+
+
+```{r}
+outcome = the_outcomes[6]
+  for(independent in results %>% distinct(this_independent) %>% unlist()){
+    temp <- results %>% filter(this_outcome == outcome) %>% filter(this_independent == independent)
+    print(gghistogram(temp, x='coef', fill='lightblue', color='blue', xlab=paste0("Coef. for predictor ", temp$this_independent[1], " and outcome ", temp$this_outcome[1])))
+  }
+
+```
+
+```{r}
+outcome = the_outcomes[7]
+  for(independent in results %>% distinct(this_independent) %>% unlist()){
+    temp <- results %>% filter(this_outcome == outcome) %>% filter(this_independent == independent)
+    print(gghistogram(temp, x='coef', fill='lightblue', color='blue', xlab=paste0("Coef. for predictor ", temp$this_independent[1], " and outcome ", temp$this_outcome[1])))
+  }
+
+```
+
+```{r}
+outcome = the_outcomes[8]
+  for(independent in results %>% distinct(this_independent) %>% unlist()){
+    temp <- results %>% filter(this_outcome == outcome) %>% filter(this_independent == independent)
+    print(gghistogram(temp, x='coef', fill='lightblue', color='blue', xlab=paste0("Coef. for predictor ", temp$this_independent[1], " and outcome ", temp$this_outcome[1])))
+  }
+
+```
+
+
+```{r}
+outcome = the_outcomes[9]
+  for(independent in results %>% distinct(this_independent) %>% unlist()){
+    temp <- results %>% filter(this_outcome == outcome) %>% filter(this_independent == independent)
+    print(gghistogram(temp, x='coef', fill='lightblue', color='blue', xlab=paste0("Coef. for predictor ", temp$this_independent[1], " and outcome ", temp$this_outcome[1])))
+  }
+
+```
+
+
+```{r}
+#library(gmodels)
+#analyze_this <- results %>% group_by(this_outcome, this_independent) %>% summarize(mean_coef = ci(coef, na.rm=TRUE)[1], lowCI_coef = ci(coef, na.rm=TRUE)[2], highCI_coef = ci(coef, na.rm=TRUE)[3], stddev_coef = sd(coef, na.rm=TRUE)) %>% mutate(below_zero = ifelse(highCI_coef < 0, 1, 0)) %>% mutate(above_zero = ifelse(lowCI_coef > 0, 1, 0)) %>% ungroup()
+
+analyze_this <- results %>% group_by(this_outcome, this_independent) %>% summarize(mean_coef = mean(coef, na.rm=TRUE), stddev_coef = sd(coef, na.rm=TRUE)) %>% ungroup() %>% mutate(below_zero = ifelse(mean_coef + 2*stddev_coef  < 0, 1, 0)) %>% mutate(above_zero = ifelse(mean_coef - 2*stddev_coef > 0, 1, 0)) %>% ungroup()
+
+```
+
+
+```{r}
+print(table(analyze_this$below_zero))
+print(table(analyze_this$above_zero))
+```
+
+```{r}
+analyze_this %>% filter(below_zero==1)
+```
+
+```{r}
+analyze_this %>% filter(above_zero==1)
+```
+
